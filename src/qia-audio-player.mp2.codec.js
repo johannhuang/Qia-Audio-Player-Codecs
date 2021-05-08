@@ -4,65 +4,93 @@ class QiaMP2Codec {
   }
 
   decode(mp2ArrayBuffer) {
-    if (mp2ArrayBuffer && mp2ArrayBuffer.byteLength > 0) {
-      const pcmLeftChannelChunks = []
-      const pcmRightChannelChunks = []
-  
-      const mp2Uint8Array = new Uint8Array(mp2ArrayBuffer)
-      const sampleRate = this._kjmp2_get_sample_rate(mp2Uint8Array)
-      if (sampleRate) {
-        let mp2Uint8ArrayLeft = mp2Uint8Array
-        const decodeOneFrameAfterAnother = () => {
-          if (mp2Uint8ArrayLeft.length === 0) return
+    return new Promise((resolve, reject) => {
+      if (mp2ArrayBuffer && mp2ArrayBuffer.byteLength > 0) {
+        try {
+          const pcmLeftChannelChunks = []
+          const pcmRightChannelChunks = []
 
-          const pcmLeftChannelChunkValues = new Array()
-          const pcmRightChannelChunkValues = new Array()
-          const decodedMP2Bytes = this._kjmp2_decode_first_frame(mp2Uint8ArrayLeft, pcmLeftChannelChunkValues, pcmRightChannelChunkValues)
-          if (decodedMP2Bytes > 0 && pcmLeftChannelChunkValues.length === pcmRightChannelChunkValues.length) {
-            const pcmLeftChannelChunkFloat32Array = new Float32Array(pcmLeftChannelChunkValues.length)
-            const pcmrRightChannelChunkFloat32Array = new Float32Array(pcmRightChannelChunkValues.length)
+          const mp2Uint8Array = new Uint8Array(mp2ArrayBuffer)
+          const sampleRate = this._kjmp2_get_sample_rate(mp2Uint8Array)
+          if (sampleRate) {
+            const concatenatePCMChunks = () => {
+              try {
+                const pcmFloat32ArrayLength = pcmLeftChannelChunks.reduce((accumulatedLength, chunkFloat32Array) => accumulatedLength + chunkFloat32Array.length, 0)
+                const pcmLeftChannelFloat32Array = new Float32Array(pcmFloat32ArrayLength)
+                let pcmLeftChannelFloat32ArrayFilledLength = 0
+                while (pcmLeftChannelChunks.length > 0) {
+                  const chunkFloat32Array = pcmLeftChannelChunks.shift()
+                  pcmLeftChannelFloat32Array.set(chunkFloat32Array, pcmLeftChannelFloat32ArrayFilledLength)
+                  pcmLeftChannelFloat32ArrayFilledLength += chunkFloat32Array.length
+                }
+                const pcmRightChannelFloat32Array = new Float32Array(pcmFloat32ArrayLength)
+                let pcmRightChannelFloat32ArrayFilledLength = 0
+                while (pcmRightChannelChunks.length > 0) {
+                  const chunkFloat32Array = pcmRightChannelChunks.shift()
+                  pcmRightChannelFloat32Array.set(chunkFloat32Array, pcmRightChannelFloat32ArrayFilledLength)
+                  pcmRightChannelFloat32ArrayFilledLength += chunkFloat32Array.length
+                }
 
-            for (let i = 0; i < pcmLeftChannelChunkValues.length; i++) {
-              pcmLeftChannelChunkFloat32Array[i] = pcmLeftChannelChunkValues[i]
-              pcmrRightChannelChunkFloat32Array[i] = pcmRightChannelChunkValues[i]
+                resolve({
+                  sampleRate: sampleRate,
+                  length: pcmFloat32ArrayLength,
+                  numOfchannels: 2,
+                  arrayBuffers: [pcmLeftChannelFloat32Array, pcmRightChannelFloat32Array]
+                })
+              } catch (error) {
+                reject(error)
+              }
             }
 
-            pcmLeftChannelChunks.push(pcmLeftChannelChunkFloat32Array)
-            pcmRightChannelChunks.push(pcmrRightChannelChunkFloat32Array)
+            let mp2Uint8ArrayLeft = mp2Uint8Array
+            const decodeOneFrameAfterAnother = () => {
+              if (mp2Uint8ArrayLeft.length === 0) {
+                concatenatePCMChunks()
+                return
+              }
 
-            mp2Uint8ArrayLeft = mp2Uint8ArrayLeft.subarray(decodedMP2Bytes)
-            decodeOneFrameAfterAnother()
+              try {
+                const pcmLeftChannelChunkValues = new Array()
+                const pcmRightChannelChunkValues = new Array()
+
+                const decodedMP2Bytes = this._kjmp2_decode_first_frame(mp2Uint8ArrayLeft, pcmLeftChannelChunkValues, pcmRightChannelChunkValues)
+                if (decodedMP2Bytes > 0 && pcmLeftChannelChunkValues.length === pcmRightChannelChunkValues.length) {
+                  const pcmLeftChannelChunkFloat32Array = new Float32Array(pcmLeftChannelChunkValues.length)
+                  const pcmrRightChannelChunkFloat32Array = new Float32Array(pcmRightChannelChunkValues.length)
+
+                  for (let i = 0; i < pcmLeftChannelChunkValues.length; i++) {
+                    pcmLeftChannelChunkFloat32Array[i] = pcmLeftChannelChunkValues[i]
+                    pcmrRightChannelChunkFloat32Array[i] = pcmRightChannelChunkValues[i]
+                  }
+
+                  pcmLeftChannelChunks.push(pcmLeftChannelChunkFloat32Array)
+                  pcmRightChannelChunks.push(pcmrRightChannelChunkFloat32Array)
+
+                  mp2Uint8ArrayLeft = mp2Uint8ArrayLeft.subarray(decodedMP2Bytes)
+                  setTimeout(() => {
+                    decodeOneFrameAfterAnother()
+                  }, 0)
+                } else {
+                  console.error('[qiaMP2Codec.decode] decoding MP2 error - decodedMP2Bytes, mp2Uint8ArrayLeft.length:', decodedMP2Bytes, mp2Uint8ArrayLeft.length)
+                  reject(new Error('Encountered decoding error - decodedMP2Bytes being 0'))
+                } 
+              } catch (error) {
+                reject(error)
+              }
+            }
+            setTimeout(() => {
+              decodeOneFrameAfterAnother()
+            }, 0)
           } else {
-            console.error('[qiaMP2Codec.decode] decoding MP2 error - decodedMP2Bytes, mp2Uint8ArrayLeft.length:', decodedMP2Bytes, mp2Uint8ArrayLeft.length)
+            reject(new Error('Cannot retrieve sample rate of provided array buffer'))
           }
+        } catch (error) {
+          reject(error)
         }
-        decodeOneFrameAfterAnother()
-
-        const pcmFloat32ArrayLength = pcmLeftChannelChunks.reduce((accumulatedLength, chunkFloat32Array) => accumulatedLength + chunkFloat32Array.length, 0)
-        const pcmLeftChannelFloat32Array = new Float32Array(pcmFloat32ArrayLength)
-        let pcmLeftChannelFloat32ArrayFilledLength = 0
-        while (pcmLeftChannelChunks.length > 0) {
-          const chunkFloat32Array = pcmLeftChannelChunks.shift()
-          pcmLeftChannelFloat32Array.set(chunkFloat32Array, pcmLeftChannelFloat32ArrayFilledLength)
-          pcmLeftChannelFloat32ArrayFilledLength += chunkFloat32Array.length
-        }
-        const pcmRightChannelFloat32Array = new Float32Array(pcmFloat32ArrayLength)
-        let pcmRightChannelFloat32ArrayFilledLength = 0
-        while (pcmRightChannelChunks.length > 0) {
-          const chunkFloat32Array = pcmRightChannelChunks.shift()
-          pcmRightChannelFloat32Array.set(chunkFloat32Array, pcmRightChannelFloat32ArrayFilledLength)
-          pcmRightChannelFloat32ArrayFilledLength += chunkFloat32Array.length
-        }
-
-        return {
-          sampleRate: sampleRate,
-          length: pcmFloat32ArrayLength,
-          numOfchannels: 2,
-          arrayBuffers: [pcmLeftChannelFloat32Array, pcmRightChannelFloat32Array]
-        }
+      } else {
+        reject(new Error('Invalid ArrayBuffer - falsy or byte length is 0'))
       }
-    }
-    return {}
+    })
   }
 
   _kjmp2_initialize_constants() {
